@@ -1,10 +1,9 @@
-getgenv().Config = {
+getgenv().Config = getgenv().Config or {
     Enabled = true,
     TeamCheck = true,
     WallCheck = true,
     MaxDistance = 5000,
     FOV = 60,
-    HitPart = "Head",
     StickyAim = true
 }
 
@@ -20,14 +19,15 @@ local fovCircle = Drawing.new("Circle")
 fovCircle.Visible = true
 fovCircle.Thickness = 1.5
 fovCircle.NumSides = 64
-fovCircle.Radius = Config.FOV
+fovCircle.Radius = getgenv().Config.FOV
 fovCircle.Filled = false
 fovCircle.Color = Color3.fromRGB(255, 255, 255)
 fovCircle.Transparency = 0.8
 
--- Actualizar la posición del círculo en pantalla en cada frame
+-- Actualizar la posición y el radio dinámicamente en cada frame
 local fovConnection
 fovConnection = RunService.RenderStepped:Connect(function()
+    local Config = getgenv().Config
     if not Config or not Config.Enabled then
         fovCircle.Visible = false
         return
@@ -44,7 +44,11 @@ local originalIndex = mouseMeta.__index
 local lockedTarget = nil
 local needsRelease = false
 
+-- Lista de partes corporales evaluadas dinámicamente
+local HitPartsList = {"Head", "UpperTorso", "Torso", "HumanoidRootPart", "LeftUpperArm", "RightUpperArm", "LeftLowerArm", "RightLowerArm", "LeftUpperLeg", "RightUpperLeg"}
+
 mouseMeta.__index = function(self, key)
+    local Config = getgenv().Config
     if not Config or not Config.Enabled then
         lockedTarget = nil
         needsRelease = false
@@ -61,7 +65,7 @@ mouseMeta.__index = function(self, key)
 
     local mousePos = UserInputService:GetMouseLocation()
 
-    -- Gestión de Sticky Aim con validaciones de seguridad contra nil
+    -- Gestión de Sticky Aim
     local isAimingOrFiring = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
     if Config.StickyAim then
         if needsRelease then
@@ -73,6 +77,7 @@ mouseMeta.__index = function(self, key)
             end
         end
 
+        -- Validar si el objetivo bloqueado sigue dentro del FOV y rango
         if lockedTarget and lockedTarget.Parent and lockedTarget:IsA("BasePart") then
             local char = lockedTarget.Parent
             local hum = char:FindFirstChildOfClass("Humanoid")
@@ -112,7 +117,7 @@ mouseMeta.__index = function(self, key)
         lockedTarget = nil
     end
 
-    -- Búsqueda estricta dentro del Círculo FOV
+    -- Búsqueda inteligente: evaluar cuál es la parte más cercana al mouse DENTRO del FOV
     local closestPart = nil
     local closestDistance = Config.FOV
 
@@ -128,29 +133,34 @@ mouseMeta.__index = function(self, key)
             if humanoid and humanoid.Health > 0 then
                 local rootPart = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Torso")
                 if rootPart and rootPart:IsA("BasePart") and (rootPart.Position - Camera.CFrame.Position).Magnitude <= Config.MaxDistance then
-                    local part = character:FindFirstChild(Config.HitPart) or rootPart
-                    if part and part:IsA("BasePart") then
-                        local screenPosition, onScreen = Camera:WorldToViewportPoint(part.Position)
-                        if onScreen then
-                            local screenPos2D = Vector2.new(screenPosition.X, screenPosition.Y)
-                            local distanceToMouse = (screenPos2D - mousePos).Magnitude
+                    
+                    -- Iterar sobre todas las partes posibles para hallar la óptima
+                    for _, partName in ipairs(HitPartsList) do
+                        local part = character:FindFirstChild(partName)
+                        if part and part:IsA("BasePart") then
+                            local screenPosition, onScreen = Camera:WorldToViewportPoint(part.Position)
+                            if onScreen then
+                                local screenPos2D = Vector2.new(screenPosition.X, screenPosition.Y)
+                                local distanceToMouse = (screenPos2D - mousePos).Magnitude
 
-                            if distanceToMouse <= closestDistance then
-                                if Config.WallCheck then
-                                    local rayParams = RaycastParams.new()
-                                    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
-                                    rayParams.FilterDescendantsInstances = {LocalPlayer.Character, character}
-                                    local rayResult = Workspace:Raycast(Camera.CFrame.Position, part.Position - Camera.CFrame.Position, rayParams)
-                                    if rayResult then
-                                        continue
+                                if distanceToMouse <= closestDistance then
+                                    if Config.WallCheck then
+                                        local rayParams = RaycastParams.new()
+                                        rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+                                        rayParams.FilterDescendantsInstances = {LocalPlayer.Character, character}
+                                        local rayResult = Workspace:Raycast(Camera.CFrame.Position, part.Position - Camera.CFrame.Position, rayParams)
+                                        if rayResult then
+                                            continue
+                                        end
                                     end
-                                end
 
-                                closestDistance = distanceToMouse
-                                closestPart = part
+                                    closestDistance = distanceToMouse
+                                    closestPart = part
+                                end
                             end
                         end
                     end
+
                 end
             end
         end
@@ -175,7 +185,7 @@ mouseMeta.__index = function(self, key)
     return originalIndex(self, key)
 end
 
--- Kill Switch con F5 (limpia el círculo, desengancha eventos y restaura la metatabla)
+-- Kill Switch con F5
 local killConnection
 killConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if not gameProcessed and input.KeyCode == Enum.KeyCode.F5 then
